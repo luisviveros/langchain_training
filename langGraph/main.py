@@ -2,8 +2,7 @@ import os
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel
-from langchain_core.output_parsers import CommaSeparatedListOutputParser
-from langchain_core.prompts import  PromptTemplate
+from langgraph.graph import StateGraph, START, END
 
 load_dotenv()
 llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0)
@@ -22,15 +21,30 @@ initial_state.user_message += "!"
 print(initial_state.user_message)
 
 def greeting_node(agent_state: AgentState)-> AgentState:
-    if "hola" in agent_state.user_message:
+    if "Hola" in agent_state.user_message:
         agent_state.greeting = True
     else:
-        agent_state.agent_response = False
+        agent_state.greeting = False
     return agent_state
 
 def response_node(agent_state: AgentState) -> AgentState:
     if agent_state.greeting:
         agent_state.agent_response = "¡Hola! ¿En qué puedo ayudarte hoy?"
     else:
-        agent_state.agent_response = "Vuelve a intenrtarlo"
+        agent_state.agent_response = "Vuelve a intentarlo"
     return agent_state
+
+
+graph = StateGraph(AgentState)
+graph.add_node(greeting_node)
+graph.add_node(response_node)
+
+graph.add_edge(START, "greeting_node")
+graph.add_edge("greeting_node", "response_node")
+graph.add_edge("response_node", END)
+
+compiled_graph = graph.compile()
+
+initial_state = AgentState(user_message="Hola")
+respone = compiled_graph.invoke(initial_state)
+print(respone["agent_response"])

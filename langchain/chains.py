@@ -17,10 +17,22 @@ Texto: {text}
 """)
 
 llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0)
-prompt = prompt_template.invoke(
+prompt = prompt_template.invoke({
+
     "text": "Este es un ejemplo con langchain"
-)
+
+})
 llm_structured = llm.with_structured_output(Answer)
 
-llm_structured_response = llm_structured.invoke(prompt)
-print(llm_result)
+#llm_structured_response = llm_structured.invoke(prompt)
+#print(llm_structured_response)
+
+chain = prompt_template  llm_structured
+
+chain_result = chain.invoke({
+
+    "text": "Este es un ejemplo con langchain"
+
+})
+
+print(chain_result)

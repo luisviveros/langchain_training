@@ -1,5 +1,5 @@
 {
-    "dependencies": "./requirements.txt",
+    "dependencies": "../requirements.txt",
     "graphs": {
         "my_first_graph": "./main.py:graph"
     },

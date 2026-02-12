@@ -1,5 +1,7 @@
 langchain-anthropic
 langchain-google-genai
+langchain-community
 python-dotenv
 langgraph
 langgraph-cli[inmem]
+pypdf

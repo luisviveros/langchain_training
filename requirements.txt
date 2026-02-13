@@ -1,7 +1,12 @@
 langchain-anthropic
 langchain-google-genai
 langchain-community
+langchain-chroma
 python-dotenv
 langgraph
 langgraph-cli[inmem]
 pypdf
+tiktoken
+chromadb
+langchain-huggingface
+sentence-transformers

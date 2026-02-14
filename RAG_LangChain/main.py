@@ -48,10 +48,20 @@ chromadb_manager = ChromadbManager()
 uuids = [str(uuid4()) for _ in range(len(texts))]
 metadatas = [{"filename": "lista_productos.pdf"} for _ in range(len(texts))]
 
-chromadb_manager.store(
-    texts=texts,
-    ids=uuids,
-    metadatas=metadatas
-    )
+#chromadb_manager.store(
+#    texts=texts,
+#    ids=uuids,
+#    metadatas=metadatas
+#    )
 
-print(chromadb_manager.find({"filename": "lista_productos.pdf"}))
+#print(chromadb_manager.find({"filename": "lista_productos.pdf"}))
+query = "Cual es el precio de la silla ergonomica herman miller"
+result = chromadb_manager.query(
+    query=query,
+    metadata={"filename": "lista_productos.pdf"},
+    k=2
+)
+
+context = "\n\n".join([doc.page_content for doc in result])
+
+print(context)

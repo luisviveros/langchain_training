@@ -11,7 +11,7 @@ load_dotenv()
 
 class ChromadbManager:
     def __init__(self):
-        self.embeddings = GoogleGenerativeAIEmbeddings(model="embedding-001")
+        self.embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
         self.vector_store = Chroma(
             collection_name="test", 
             embedding_function=self.embeddings,
@@ -36,10 +36,10 @@ class ChromadbManager:
     ):
         result = self.vector_store.get(
             where=metadata,
-            include=["embeddings", "documents"],
+            include=["documents"],
         )
 
-        return result
+        return result["documents"]
 
     def query(
         self,
@@ -47,10 +47,22 @@ class ChromadbManager:
         metadata: dict,  
         k: int = 2  
     ): 
-        ...
+        result = self.vector_store.similarity_search(
+            query=query,
+            k=k,
+            filter=metadata
+        )
+        
+        return result
+
+
+
 
     def drop(
             self,
             metadata: dict
     ):
-        ...
+        self.vector_store.delete(
+            where=metadata
+            )
+        

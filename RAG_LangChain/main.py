@@ -1,3 +1,4 @@
+from itertools import chain
 from modulefinder import test
 import os
 from pydoc import text
@@ -10,6 +11,7 @@ from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader
 from langchain_text_splitters import CharacterTextSplitter, RecursiveCharacterTextSplitter, TokenTextSplitter
 from uuid_utils import uuid4
 from chromadb_manager import ChromadbManager
+from langchain_core.prompts import PromptTemplate
 
 load_dotenv()
 
@@ -35,8 +37,8 @@ for page in content:
 #)
 
 text_splitter = TokenTextSplitter(
-    chunk_size=12,
-    chunk_overlap=5,
+    chunk_size=500,
+    chunk_overlap=50,
 )
 
 texts = text_splitter.split_text(text)
@@ -54,7 +56,9 @@ metadatas = [{"filename": "lista_productos.pdf"} for _ in range(len(texts))]
 #    metadatas=metadatas
 #    )
 
-#print(chromadb_manager.find({"filename": "lista_productos.pdf"}))
+#print(len(chromadb_manager.find({"filename": "lista_productos.pdf"})))
+
+
 query = "Cual es el precio de la silla ergonomica herman miller"
 result = chromadb_manager.query(
     query=query,
@@ -64,4 +68,26 @@ result = chromadb_manager.query(
 
 context = "\n\n".join([doc.page_content for doc in result])
 
-print(context)
+#print(context)
+
+prompt_template = PromptTemplate.from_template(
+    """
+    Eres un agente que responde preguntas acerca de productos tecnologicos.
+    Debes responer en base a la informacion que existe en el 'Contexto'.
+
+    *Contexto*:
+    {context}
+
+    *Pregunta del usuario*:
+    {query}
+    """
+)
+
+llm = ChatGoogleGenerativeAI(model="models/gemini-2.0-flash", temperature=0.2)
+chain = prompt_template | llm
+chain_result = chain.invoke({
+    "context": context,
+    "query": query
+})
+
+print(chain_result.content)

@@ -1,6 +1,6 @@
 venv/
 .env
-.db
 __pycache__/
 RAG_LangChain/chroma_db_langchain.db/
 Project/chroma_db_langchain.db/
+RAG_LangChain/__pycache__

@@ -1,7 +1,5 @@
-import sys
 import os
 import datetime
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'RAG_LangChain'))
 
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -10,7 +8,7 @@ from langchain_core.messages import AnyMessage, AIMessage, HumanMessage
 from langgraph.graph import add_messages
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
-from chromadb_manager import ChromadbManager
+from chromadb_manager_project import ChromadbManager
 from langgraph.graph import StateGraph, START, END
 from fastapi import FastAPI
 from langgraph.checkpoint.memory import MemorySaver

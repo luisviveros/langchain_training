@@ -1,10 +1,13 @@
 import os
 import datetime
+from zoneinfo import ZoneInfo
+
+TZ_MEXICO = ZoneInfo("America/Mexico_City")
 
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import Annotated, Literal
-from langchain_core.messages import AnyMessage, AIMessage, HumanMessage
+from typing import Annotated, Literal, cast
+from langchain_core.messages import AnyMessage, AIMessage, HumanMessage, ToolMessage
 from langgraph.graph import add_messages
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -18,6 +21,35 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
 load_dotenv()
+
+SERVICES_INFO = {
+    "consulta general":        {"label": "Consulta General",                    "cost": "$50"},
+    "pediatria":               {"label": "Pediatría",                           "cost": "$60"},
+    "pediatría":               {"label": "Pediatría",                           "cost": "$60"},
+    "ginecologia":             {"label": "Ginecología",                         "cost": "$70"},
+    "ginecología":             {"label": "Ginecología",                         "cost": "$70"},
+    "cardiologia":             {"label": "Cardiología",                         "cost": "$80"},
+    "cardiología":             {"label": "Cardiología",                         "cost": "$80"},
+    "medicina interna":        {"label": "Medicina Interna",                    "cost": "$75"},
+    "examenes de laboratorio": {"label": "Exámenes de Laboratorio",             "cost": "Desde $30 (dependiendo de las pruebas)"},
+    "exámenes de laboratorio": {"label": "Exámenes de Laboratorio",             "cost": "Desde $30 (dependiendo de las pruebas)"},
+    "vacunacion":              {"label": "Vacunación",                          "cost": "Desde $20 (según el tipo de vacuna)"},
+    "vacunación":              {"label": "Vacunación",                          "cost": "Desde $20 (según el tipo de vacuna)"},
+    "control de diabetes":     {"label": "Control de Diabetes e Hipertensión",  "cost": "$40 por consulta"},
+    "diabetes e hipertension": {"label": "Control de Diabetes e Hipertensión",  "cost": "$40 por consulta"},
+    "diabetes e hipertensión": {"label": "Control de Diabetes e Hipertensión",  "cost": "$40 por consulta"},
+}
+
+# weekday(): 0=Lunes, 6=Domingo. Tupla (hora_inicio, hora_fin) en formato 24h
+WORKING_HOURS = {
+    0: (8, 19),   # Lunes
+    1: (8, 19),   # Martes
+    2: (8, 19),   # Miércoles
+    3: (8, 19),   # Jueves
+    4: (8, 19),   # Viernes
+    5: (9, 14),   # Sábado
+    6: None,      # Domingo: cerrado
+}
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 CREDENTIALS_FILE = os.path.join(os.path.dirname(__file__), "credentials.json")
@@ -52,10 +84,84 @@ class LanguageOutput(BaseModel):
 class QuestionType(BaseModel):
     question_type: Literal["appointment", "question"]
 
-def create_appointment(date: str, description: str = ""):
+def check_availability(date: str) -> str:
     """
-    Recibe una fecha (formato: YYYY-MM-DD o DD/MM/YYYY) y opcionalmente una descripción
-    para agendar una cita médica en Google Calendar.
+    Consulta los horarios disponibles para una fecha específica.
+    Revisa Google Calendar para evitar empalmes y respeta el horario del consultorio:
+    Lunes a Viernes 8:00 AM - 7:00 PM, Sábado 9:00 AM - 2:00 PM, Domingo cerrado.
+    """
+    try:
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+            try:
+                parsed_date = datetime.datetime.strptime(date.strip(), fmt)
+                break
+            except ValueError:
+                continue
+        else:
+            return f"No pude interpretar la fecha '{date}'. Por favor usa formato DD/MM/YYYY."
+
+        weekday = parsed_date.weekday()
+        day_names = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+        day_name = day_names[weekday]
+
+        if WORKING_HOURS[weekday] is None:
+            return f"El consultorio está cerrado los domingos. Por favor elige otro día."
+
+        start_hour, end_hour = WORKING_HOURS[weekday]
+
+        # Consultar eventos existentes en Google Calendar
+        calendar_service = get_google_calendar_service()
+        time_min = parsed_date.strftime("%Y-%m-%d") + "T00:00:00-06:00"
+        time_max = parsed_date.strftime("%Y-%m-%d") + "T23:59:59-06:00"
+        events_result = calendar_service.events().list(
+            calendarId="primary",
+            timeMin=time_min,
+            timeMax=time_max,
+            singleEvents=True,
+            orderBy="startTime"
+        ).execute()
+        events = events_result.get("items", [])
+
+        # Marcar horas ocupadas (convertir a hora local para comparar correctamente)
+        occupied_hours = set()
+        for event in events:
+            start = event["start"].get("dateTime", event["start"].get("date", ""))
+            if "T" in start:
+                event_start = datetime.datetime.fromisoformat(start).astimezone(TZ_MEXICO)
+                occupied_hours.add(event_start.hour)
+
+        # Generar slots disponibles
+        available_slots = []
+        for hour in range(start_hour, end_hour):
+            if hour not in occupied_hours:
+                slot = datetime.time(hour, 0).strftime("%I:%M %p")
+                available_slots.append(slot)
+
+        if not available_slots:
+            return (
+                f"No hay horarios disponibles para el {day_name} {parsed_date.strftime('%d/%m/%Y')}. "
+                f"Todos los espacios están ocupados. Por favor elige otra fecha."
+            )
+
+        schedule = "8:00 AM - 7:00 PM" if weekday < 5 else "9:00 AM - 2:00 PM"
+        slots_str = " | ".join(available_slots)
+        return (
+            f"📅 Horarios disponibles para el {day_name} {parsed_date.strftime('%d/%m/%Y')} "
+            f"(horario de atención: {schedule}):\n{slots_str}\n\n"
+            f"¿A qué hora prefieres tu cita?"
+        )
+
+    except Exception as e:
+        return f"No pude verificar la disponibilidad: {str(e)}"
+
+
+def create_appointment(date: str, service: str = "", time: str = "", description: str = ""):
+    """
+    Agenda una cita médica en Google Calendar.
+    - date: fecha en formato DD/MM/YYYY o YYYY-MM-DD
+    - service: tipo de servicio médico (ej: 'consulta general', 'pediatria', 'cardiologia', etc.)
+    - time: hora opcional en formato HH:MM o H:MM am/pm (ej: '10:00', '2:30 pm')
+    - description: descripción adicional opcional
     """
     try:
         # Normalizar formato de fecha
@@ -68,35 +174,106 @@ def create_appointment(date: str, description: str = ""):
         else:
             return f"No pude interpretar la fecha '{date}'. Por favor usa formato DD/MM/YYYY."
 
-        event = {
-            "summary": description if description else "Cita médica",
-            "description": description,
-            "start": {
-                "date": parsed_date.strftime("%Y-%m-%d"),
-                "timeZone": "America/Bogota",
-            },
-            "end": {
-                "date": parsed_date.strftime("%Y-%m-%d"),
-                "timeZone": "America/Bogota",
-            },
-        }
+        # Resolver servicio y costo
+        service_key = service.strip().lower() if service else ""
+        service_data = SERVICES_INFO.get(service_key, None)
+        service_label = service_data["label"] if service_data else (service.strip() if service else "Cita médica")
+        service_cost = service_data["cost"] if service_data else None
 
-        service = get_google_calendar_service()
-        created_event = service.events().insert(calendarId="primary", body=event).execute()
+        event_summary = service_label
+        event_description = description if description else service_label
+
+        if time:
+            # Normalizar y parsear la hora
+            time_clean = time.strip().lower()
+            parsed_time = None
+            for fmt in ("%I:%M %p", "%I %p", "%H:%M", "%H"):
+                try:
+                    parsed_time = datetime.datetime.strptime(time_clean, fmt)
+                    break
+                except ValueError:
+                    continue
+            if parsed_time is None:
+                return f"No pude interpretar la hora '{time}'. Por favor usa formato HH:MM o H:MM am/pm."
+
+            start_dt = parsed_date.replace(hour=parsed_time.hour, minute=parsed_time.minute, second=0)
+            end_dt = start_dt + datetime.timedelta(hours=1)
+
+            # Verificar que el slot no esté ocupado antes de crear
+            day_min = parsed_date.strftime("%Y-%m-%d") + "T00:00:00-06:00"
+            day_max = parsed_date.strftime("%Y-%m-%d") + "T23:59:59-06:00"
+            existing_events = get_google_calendar_service().events().list(
+                calendarId="primary",
+                timeMin=day_min,
+                timeMax=day_max,
+                singleEvents=True,
+            ).execute().get("items", [])
+            for existing in existing_events:
+                ev_start_str = existing["start"].get("dateTime", "")
+                if "T" in ev_start_str:
+                    ev_local = datetime.datetime.fromisoformat(ev_start_str).astimezone(TZ_MEXICO)
+                    if ev_local.hour == start_dt.hour:
+                        date_label_err = parsed_date.strftime("%d/%m/%Y")
+                        time_label_err = start_dt.strftime("%I:%M %p")
+                        return (
+                            f"⚠️ El horario de las {time_label_err} del {date_label_err} ya está ocupado. "
+                            f"Por favor elige otra hora disponible."
+                        )
+
+            event = {
+                "summary": event_summary,
+                "description": event_description,
+                "start": {
+                    "dateTime": start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "timeZone": "America/Mexico_City",
+                },
+                "end": {
+                    "dateTime": end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "timeZone": "America/Mexico_City",
+                },
+            }
+            time_label = start_dt.strftime("%I:%M %p")
+        else:
+            event = {
+                "summary": event_summary,
+                "description": event_description,
+                "start": {
+                    "date": parsed_date.strftime("%Y-%m-%d"),
+                    "timeZone": "America/Mexico_City",
+                },
+                "end": {
+                    "date": parsed_date.strftime("%Y-%m-%d"),
+                    "timeZone": "America/Mexico_City",
+                },
+            }
+            time_label = None
+
+        calendar_service = get_google_calendar_service()
+        created_event = calendar_service.events().insert(calendarId="primary", body=event).execute()
         event_link = created_event.get("htmlLink", "")
-        return f"Cita médica agendada para el {parsed_date.strftime('%d/%m/%Y')}. Puedes verla en: {event_link}"
+        date_label = parsed_date.strftime("%d/%m/%Y")
+
+        time_part = f" a las {time_label}" if time_label else ""
+        cost_part = f"\n💰 Costo: {service_cost}" if service_cost else ""
+
+        return (
+            f"✅ Tu cita de {service_label} ha sido agendada para el {date_label}{time_part}."
+            f"{cost_part}"
+            f"\n⏰ Por favor trata de llegar 10 minutos antes al consultorio."
+            f"\n🔗 Puedes verla en: {event_link}"
+        )
 
     except Exception as e:
         return f"No se pudo agendar la cita en Google Calendar: {str(e)}"
 
 
 
-def detect_language_node(state: AgentState) -> LanguageOutput:
+def detect_language_node(state: AgentState) -> AgentState:
     llm = ChatGoogleGenerativeAI(model="models/gemini-2.0-flash", temperature=0.2)
     llm_parsed = llm.with_structured_output(LanguageOutput)
-    response: LanguageOutput = llm_parsed.invoke(
+    response = cast(LanguageOutput, llm_parsed.invoke(
         f"Detecta el lenguaje del siguiente texto, responde 'es' o 'en': '{state.user_message}' "
-    )
+    ))
     state.language = response.lenguage
     print(f"Lenguaje detectado: {state.language}")
 
@@ -133,19 +310,30 @@ def detect_question_type_node(state: AgentState) -> Literal["appointment_node", 
     else:
         return "query_node"
     
-def appointment_node(state: AgentState)->AgentState:
-    tools = [create_appointment]
-    llm = ChatGoogleGenerativeAI(model="models/gemini-2.0-flash", temperature=0.2).bind_tools(tools)
-    response = llm.invoke(state.messages)
-    if response.tool_calls:
-        function_result = None
+def appointment_node(state: AgentState) -> AgentState:
+    tool_map = {
+        "check_availability": check_availability,
+        "create_appointment": create_appointment,
+    }
+    llm = ChatGoogleGenerativeAI(model="models/gemini-2.0-flash", temperature=0.2).bind_tools(
+        list(tool_map.values())
+    )
+    messages = list(state.messages)
+
+    for _ in range(5):  # máximo 5 iteraciones para evitar loops infinitos
+        response = llm.invoke(messages)
+        messages.append(response)
+
+        if not response.tool_calls:
+            state.messages = [AIMessage(content=response.content)]
+            break
+
         for tool_call in response.tool_calls:
-            if tool_call["name"] == "create_appointment":
-                args = tool_call["args"]
-                function_result = create_appointment(**args)
-        state.messages = [AIMessage(content=function_result)]
-    else:
-        state.messages = [AIMessage(content=response.content)]
+            tool_name = tool_call["name"]
+            if tool_name in tool_map:
+                result = tool_map[tool_name](**tool_call["args"])
+                messages.append(ToolMessage(content=str(result), tool_call_id=tool_call["id"]))
+
     return state
 
 def query_node(state: AgentState)->AgentState:
